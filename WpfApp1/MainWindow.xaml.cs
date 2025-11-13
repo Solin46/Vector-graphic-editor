@@ -35,8 +35,8 @@ namespace VectorEditor
         private Color strokeColor = Colors.LightGray;
         private double strokeThickness = 2;
 
-        private Queue<EditorAction> undoQueue = new Queue<EditorAction>();
-        private const int MAX_UNDO_STEPS = 10;
+        private Queue<EditorAction> undoQueue = new Queue<EditorAction>(); // очередь для отмены
+        private const int MAX_UNDO_STEPS = 10; // последние 10 действий
 
         private List<Point> polygonPoints = new List<Point>();
         private bool isCreatingPolygon = false;
@@ -49,6 +49,13 @@ namespace VectorEditor
         // Ограничения масштабирования
         private const double MIN_SCALE = 0.3;
         private const double MAX_SCALE = 3.0;
+
+        // Размер маркеров относительно размера фигуры
+        private const double HANDLE_SIZE_RATIO = 0.1;
+        private const double MIN_HANDLE_SIZE = 6;
+        private const double MAX_HANDLE_SIZE = 12;
+        private int activeHandleIndex = -1; // переменная для хранения активного маркера
+
         // Предустановленные цвета
         private readonly (string Name, Color Color)[] fillColors = new[]
         {
@@ -88,7 +95,7 @@ namespace VectorEditor
 
         public class EditorAction
         {
-            public string Type { get; set; }
+            public string Type { get; set; } // тип действия, применяющегося к фигуре
             public Shape TargetShape { get; set; }
             public object OldValue { get; set; }
             public object NewValue { get; set; }
@@ -606,25 +613,28 @@ namespace VectorEditor
 
         #region Масштабирование фигур
 
-        private void ShowResizeHandles(Shape shape) //показывает маркеры масштабирования
+        private void ShowResizeHandles(Shape shape)
         {
             HideResizeHandles();
 
             Rect bounds = GetShapeBounds(shape);
 
+            // Вычисляем динамический размер маркера
+            double handleSize = CalculateHandleSize(bounds.Width, bounds.Height);
+
             for (int i = 0; i < 8; i++)
             {
                 var handle = new Rectangle
                 {
-                    Width = 8,
-                    Height = 8,
+                    Width = handleSize,
+                    Height = handleSize,
                     Fill = Brushes.White,
                     Stroke = Brushes.Black,
                     StrokeThickness = 1,
                     Cursor = GetResizeCursor(i)
                 };
 
-                PositionResizeHandle(handle, bounds, i);
+                PositionResizeHandle(handle, bounds, i, handleSize);
 
                 handle.MouseDown += ResizeHandle_MouseDown;
                 handle.MouseMove += ResizeHandle_MouseMove;
@@ -634,12 +644,42 @@ namespace VectorEditor
                 mainCanvas.Children.Add(handle);
             }
         }
+
+        private void UpdateResizeHandlesPosition()
+        {
+            if (selectedShape == null) return;
+
+            Rect bounds = GetShapeBounds(selectedShape);
+            double handleSize = CalculateHandleSize(bounds.Width, bounds.Height);
+
+            for (int i = 0; i < resizeHandles.Count; i++)
+            {
+                var handle = resizeHandles[i];
+
+                // обновление размера маркера
+                if (Math.Abs(handle.Width - handleSize) > 0.1)
+                {
+                    handle.Width = handleSize;
+                    handle.Height = handleSize;
+                }
+
+                PositionResizeHandle(handle, bounds, i, handleSize);
+            }
+        }
+
+        private double CalculateHandleSize(double width, double height)
+        {
+            // размер маркера - процент от размера фигуры с учётом ограничений
+            double size = Math.Min(width, height) * HANDLE_SIZE_RATIO;
+            return Math.Max(MIN_HANDLE_SIZE, Math.Min(MAX_HANDLE_SIZE, size));
+        }
+
         private void ResizeHandle_MouseMove(object sender, MouseEventArgs e)
         {
             if (isScaling && e.LeftButton == MouseButtonState.Pressed)
             {
                 var position = e.GetPosition(mainCanvas);
-                
+
                 ScaleShape(position);
                 e.Handled = true;
             }
@@ -650,9 +690,12 @@ namespace VectorEditor
             if (isScaling)
             {
                 isScaling = false;
+                activeHandleIndex = -1; // Сбрасываем активный маркер
                 if (selectedShape != null)
                 {
                     SaveFinalPosition("Scale", selectedShape);
+                    
+                    UpdateResizeHandlesPosition(); //обновление маркеров при завершении
                 }
                 e.Handled = true;
             }
@@ -662,7 +705,7 @@ namespace VectorEditor
         {
             foreach (var handle in resizeHandles)
             {
-                mainCanvas.Children.Remove(handle);
+                mainCanvas.Children.Remove(handle); //удаление всех маркеров из визуального дерева
             }
             resizeHandles.Clear();
         }
@@ -683,20 +726,21 @@ namespace VectorEditor
             }
         }
 
-        private void PositionResizeHandle(Rectangle handle, Rect bounds, int index)
+        private void PositionResizeHandle(Rectangle handle, Rect bounds, int index, double handleSize)
         {
             double x = 0, y = 0;
+            double halfHandle = handleSize / 2;
 
             switch (index)
             {
-                case 0: x = bounds.Left - 4; y = bounds.Top - 4; break;
-                case 1: x = bounds.Left + bounds.Width / 2 - 4; y = bounds.Top - 4; break;
-                case 2: x = bounds.Right - 4; y = bounds.Top - 4; break;
-                case 3: x = bounds.Right - 4; y = bounds.Top + bounds.Height / 2 - 4; break;
-                case 4: x = bounds.Right - 4; y = bounds.Bottom - 4; break;
-                case 5: x = bounds.Left + bounds.Width / 2 - 4; y = bounds.Bottom - 4; break;
-                case 6: x = bounds.Left - 4; y = bounds.Bottom - 4; break;
-                case 7: x = bounds.Left - 4; y = bounds.Top + bounds.Height / 2 - 4; break;
+                case 0: x = bounds.Left - halfHandle; y = bounds.Top - halfHandle; break;        // Верхний левый
+                case 1: x = bounds.Left + bounds.Width / 2 - halfHandle; y = bounds.Top - halfHandle; break; // Верхний средний
+                case 2: x = bounds.Right - halfHandle; y = bounds.Top - halfHandle; break;       // Верхний правый
+                case 3: x = bounds.Right - halfHandle; y = bounds.Top + bounds.Height / 2 - halfHandle; break; // Правый средний
+                case 4: x = bounds.Right - halfHandle; y = bounds.Bottom - halfHandle; break;    // Нижний правый
+                case 5: x = bounds.Left + bounds.Width / 2 - halfHandle; y = bounds.Bottom - halfHandle; break; // Нижний средний
+                case 6: x = bounds.Left - halfHandle; y = bounds.Bottom - halfHandle; break;     // Нижний левый
+                case 7: x = bounds.Left - halfHandle; y = bounds.Top + bounds.Height / 2 - halfHandle; break; // Левый средний
             }
 
             Canvas.SetLeft(handle, x);
@@ -745,66 +789,137 @@ namespace VectorEditor
             {
                 isScaling = true;
                 scaleStartPoint = e.GetPosition(mainCanvas);
+
+                // Сохраняем индекс активного маркера в начале масштабирования
+                activeHandleIndex = GetActiveHandleIndex(scaleStartPoint);
+
                 SaveInitialPosition(selectedShape);
                 e.Handled = true;
             }
         }
+
+        private int GetActiveHandleIndex(Point position)
+        {
+            for (int i = 0; i < resizeHandles.Count; i++)
+            {
+                var handle = resizeHandles[i];
+                double left = Canvas.GetLeft(handle);
+                double top = Canvas.GetTop(handle);
+                Rect handleBounds = new Rect(left, top, handle.Width, handle.Height);
+
+                if (handleBounds.Contains(position))
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         private void ScaleShape(Point position)
         {
-            if (selectedShape == null) return;
+            if (selectedShape == null || activeHandleIndex == -1) return;
 
             double deltaX = position.X - scaleStartPoint.X;
             double deltaY = position.Y - scaleStartPoint.Y;
 
-            double scaleFactorX = 1.0 + deltaX / 100.0;
-            double scaleFactorY = 1.0 + deltaY / 100.0;
+            Rect bounds = GetShapeBounds(selectedShape); // текущие границы фигуры
 
-            scaleFactorX = Math.Max(MIN_SCALE, Math.Min(MAX_SCALE, scaleFactorX));
-            scaleFactorY = Math.Max(MIN_SCALE, Math.Min(MAX_SCALE, scaleFactorY));
+            // новые размеры и позицию в зависимости от активного маркера
+            double newLeft = bounds.Left;
+            double newTop = bounds.Top;
+            double newWidth = bounds.Width;
+            double newHeight = bounds.Height;
 
-            if (selectedShape is Rectangle rect)
+            // Используем сохраненный индекс активного маркера
+            switch (activeHandleIndex)
             {
-                double newWidth = Math.Max(10, rect.Width * scaleFactorX);
-                double newHeight = Math.Max(10, rect.Height * scaleFactorY);
+                case 0: // Верхний левый
+                    newLeft = bounds.Left + deltaX;
+                    newTop = bounds.Top + deltaY;
+                    newWidth = Math.Max(10, bounds.Width - deltaX);
+                    newHeight = Math.Max(10, bounds.Height - deltaY);
+                    break;
+                case 1: // Верхний средний
+                    newTop = bounds.Top + deltaY;
+                    newHeight = Math.Max(10, bounds.Height - deltaY);
+                    break;
+                case 2: // Верхний правый
+                    newTop = bounds.Top + deltaY;
+                    newWidth = Math.Max(10, bounds.Width + deltaX);
+                    newHeight = Math.Max(10, bounds.Height - deltaY);
+                    break;
+                case 3: // Правый средний
+                    newWidth = Math.Max(10, bounds.Width + deltaX);
+                    break;
+                case 4: // Нижний правый
+                    newWidth = Math.Max(10, bounds.Width + deltaX);
+                    newHeight = Math.Max(10, bounds.Height + deltaY);
+                    break;
+                case 5: // Нижний средний
+                    newHeight = Math.Max(10, bounds.Height + deltaY);
+                    break;
+                case 6: // Нижний левый
+                    newLeft = bounds.Left + deltaX;
+                    newWidth = Math.Max(10, bounds.Width - deltaX);
+                    newHeight = Math.Max(10, bounds.Height + deltaY);
+                    break;
+                case 7: // Левый средний
+                    newLeft = bounds.Left + deltaX;
+                    newWidth = Math.Max(10, bounds.Width - deltaX);
+                    break;
+            }
 
-                rect.Width = newWidth;
-                rect.Height = newHeight;
-            }
-            else if (selectedShape is Ellipse ellipse)
-            {
-                double newWidth = Math.Max(10, ellipse.Width * scaleFactorX);
-                double newHeight = Math.Max(10, ellipse.Height * scaleFactorY);
+            ApplyScaling(selectedShape, newLeft, newTop, newWidth, newHeight);
+            UpdateResizeHandlesPosition();
 
-                ellipse.Width = newWidth;
-                ellipse.Height = newHeight;
-            }
-            else if (selectedShape is Line line)
-            {
-                line.X2 = line.X1 + (line.X2 - line.X1) * scaleFactorX;
-                line.Y2 = line.Y1 + (line.Y2 - line.Y1) * scaleFactorY;
-            }
-            else if (selectedShape is Polygon polygon)
-            {
-                ScalePolygon(polygon, scaleFactorX, scaleFactorY);
-            }
-
-            ShowResizeHandles(selectedShape);
             scaleStartPoint = position;
         }
 
-        private void ScalePolygon(Polygon polygon, double scaleX, double scaleY)
+        private void ApplyScaling(Shape shape, double left, double top, double width, double height)
+        {
+            if (shape is Rectangle rect)
+            {
+                Canvas.SetLeft(rect, left);
+                Canvas.SetTop(rect, top);
+                rect.Width = width;
+                rect.Height = height;
+            }
+            else if (shape is Ellipse ellipse)
+            {
+                Canvas.SetLeft(ellipse, left);
+                Canvas.SetTop(ellipse, top);
+                ellipse.Width = width;
+                ellipse.Height = height;
+            }
+            else if (shape is Line line)
+            {
+                line.X1 = left;
+                line.Y1 = top;
+                line.X2 = left + width;
+                line.Y2 = top + height;
+            }
+            else if (shape is Polygon polygon)
+            {
+                ScalePolygon(polygon, left, top, width, height);
+            }
+        }
+
+        private void ScalePolygon(Polygon polygon, double newLeft, double newTop, double newWidth, double newHeight)
         {
             if (polygon.Points.Count == 0) return;
 
-            double centerX = polygon.Points.Average(p => p.X);
-            double centerY = polygon.Points.Average(p => p.Y);
+            Rect oldBounds = GetShapeBounds(polygon);
+
+            // коэффициенты масштабирования
+            double scaleX = newWidth / oldBounds.Width;
+            double scaleY = newHeight / oldBounds.Height;
 
             var newPoints = new PointCollection();
             foreach (Point point in polygon.Points)
             {
-                double newX = centerX + (point.X - centerX) * scaleX;
-                double newY = centerY + (point.Y - centerY) * scaleY;
-                newPoints.Add(new Point(newX, newY));
+                double scaledX = newLeft + (point.X - oldBounds.Left) * scaleX;
+                double scaledY = newTop + (point.Y - oldBounds.Top) * scaleY;
+                newPoints.Add(new Point(scaledX, scaledY));
             }
             polygon.Points = newPoints;
         }
@@ -844,7 +959,7 @@ namespace VectorEditor
 
             if (resizeHandles.Count > 0)
             {
-                ShowResizeHandles(selectedShape);
+                UpdateResizeHandlesPosition(); //обновление позиции маркеров без пересоздания
             }
 
             moveStartPoint = position;
@@ -1012,7 +1127,6 @@ namespace VectorEditor
                 switch (lastAction.Type)
                 {
                     case "Create":
-                        Debug.WriteLine($"🗑️ УДАЛЕНИЕ ФИГУРЫ: {lastAction.TargetShape.GetType().Name}");
                         if (mainCanvas.Children.Contains(lastAction.TargetShape))
                         {
                             mainCanvas.Children.Remove(lastAction.TargetShape);
@@ -1021,7 +1135,6 @@ namespace VectorEditor
                         break;
 
                     case "Delete":
-                        Debug.WriteLine($"↶ ВОССТАНОВЛЕНИЕ ФИГУРЫ: {lastAction.TargetShape.GetType().Name}");
                         if (!mainCanvas.Children.Contains(lastAction.TargetShape))
                         {
                             if (lastAction.FullState != null)
@@ -1037,7 +1150,6 @@ namespace VectorEditor
                     case "Scale":
                         if (lastAction.OldValue is ShapePosition oldPos)
                         {
-                            Debug.WriteLine($"↶ ВОССТАНОВЛЕНИЕ ПОЗИЦИИ: {lastAction.TargetShape.GetType().Name}");
                             RestorePosition(lastAction.TargetShape, oldPos);
                             if (selectedShape == lastAction.TargetShape)
                             {
@@ -1049,7 +1161,6 @@ namespace VectorEditor
                     case "ModifyColor":
                         if (lastAction.OldValue is Color oldColor)
                         {
-                            Debug.WriteLine($"↶ ВОССТАНОВЛЕНИЕ ЦВЕТА: {oldColor} для {lastAction.TargetShape.GetType().Name}");
                             lastAction.TargetShape.Fill = new SolidColorBrush(oldColor);
                             UpdateColorButtons();
                         }
@@ -1058,14 +1169,11 @@ namespace VectorEditor
                     case "ModifyStroke":
                         if (lastAction.OldValue is Color oldStrokeColor)
                         {
-                            Debug.WriteLine($"↶ ВОССТАНОВЛЕНИЕ ОБВОДКИ: {oldStrokeColor} для {lastAction.TargetShape.GetType().Name}");
                             lastAction.TargetShape.Stroke = new SolidColorBrush(oldStrokeColor);
                             UpdateColorButtons();
                         }
                         break;
                 }
-
-                Debug.WriteLine($"✅ ОТМЕНА УСПЕШНА: {lastAction.Type}");
             }
             catch (Exception ex)
             {
@@ -1182,13 +1290,10 @@ namespace VectorEditor
                             return;
                         }
 
-                        Debug.WriteLine($"🎨 ИЗМЕНЕНИЕ ЦВЕТА: {selectedShape.GetType().Name}");
-
                         var oldColor = ((SolidColorBrush)selectedShape.Fill).Color;
                         SaveAction("ModifyColor", selectedShape, oldColor, colorInfo.Color, "FillColor");
                         selectedShape.Fill = new SolidColorBrush(colorInfo.Color);
 
-                        Debug.WriteLine($"✅ ЦВЕТ ИЗМЕНЕН: {oldColor} -> {colorInfo.Color}");
                     }
                     else if (currentMode == EditorMode.Creating)
                     {
@@ -1253,15 +1358,12 @@ namespace VectorEditor
                             return;
                         }
 
-                        Debug.WriteLine($"🎨 ИЗМЕНЕНИЕ ОБВОДКИ: {selectedShape.GetType().Name}");
-
                         var oldColor = ((SolidColorBrush)selectedShape.Stroke).Color;
                         SaveAction("ModifyStroke", selectedShape, oldColor, colorInfo.Color, "StrokeColor");
                         selectedShape.Stroke = new SolidColorBrush(colorInfo.Color);
                         strokeColor = colorInfo.Color;
                         UpdateColorButtons();
 
-                        Debug.WriteLine($"✅ ОБВОДКА ИЗМЕНЕНА: {oldColor} -> {colorInfo.Color}");
                     }
                     else if (currentMode == EditorMode.Creating)
                     {
@@ -1280,14 +1382,10 @@ namespace VectorEditor
         {
             if (selectedShape != null && mainCanvas != null)
             {
-                Debug.WriteLine($"🗑️ УДАЛЕНИЕ ФИГУРЫ: {selectedShape.GetType().Name}");
-
                 var fullState = GetFullShapeState(selectedShape);
                 SaveAction("Delete", selectedShape, null, null, null, fullState);
                 mainCanvas.Children.Remove(selectedShape);
                 DeselectShape();
-
-                Debug.WriteLine($"✅ ФИГУРА УДАЛЕНА");
             }
         }
 
